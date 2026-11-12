@@ -14,3 +14,9 @@ export_credentials.cfg
 .mono/
 data_*/
 mono_crash.*.json
+
+# Native build outputs
+build*/
+work/
+demo/addons/juce_bridge/bin/*
+!demo/addons/juce_bridge/bin/.gitkeep

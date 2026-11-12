@@ -1,0 +1,24 @@
+name: Windows native build
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S . -B build -A x64 -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build --config Release --parallel 2
+      - name: Install Godot 4.3 and run integration tests
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_win64.exe.zip -OutFile "$env:RUNNER_TEMP/godot.zip"
+          Expand-Archive "$env:RUNNER_TEMP/godot.zip" "$env:RUNNER_TEMP/godot"
+          $godot = "$env:RUNNER_TEMP/godot/Godot_v4.3-stable_win64_console.exe"
+          python tests/make_fixture.py
+          & $godot --headless --path demo --editor --import --quit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $godot --headless --path demo --script res://tests/engine_test.gd
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: godot-juce-windows-x64
+          path: demo/

@@ -1,0 +1,9 @@
+config_version=5
+[application]
+config/name="Godot JUCE — Audio Bridge"
+run/main_scene="res://main.tscn"
+[display]
+window/size/viewport_width=900
+window/size/viewport_height=560
+[rendering]
+renderer/rendering_method="gl_compatibility"
