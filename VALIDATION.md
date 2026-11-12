@@ -1,13 +1,18 @@
-# Validation of the initial prototype
+# Validation of multitrack milestone (0.2)
 
-Validated in this session on Linux x86_64 with GCC 14.2, CMake 4.4.4, JUCE 8.0.6, godot-cpp godot-4.3-stable and Godot 4.6.3.
+Validated locally on Linux x86_64 with GCC 14.2, CMake 4.4.4, JUCE 8.0.6 and godot-cpp godot-4.3-stable.
 
-- Native debug build: passed, including link-time checking for unresolved symbols.
-- Godot headless editor import: passed without errors or warnings.
-- Native registration, WAV decoding/duration, failed-load recovery, nonfinite gain handling and repeated engine cleanup: passed (`demo/tests/engine_test.gd`).
-- Demo scene startup and shutdown: passed in headless mode.
-- `git diff --check`: passed.
+Passed:
 
-This environment has no Windows toolchain/audio devices. The Linux check used `-DCMAKE_CXX_FLAGS="-DJUCE_ALSA=0 -DJUCE_JACK=0"` because ALSA development headers are absent. It does not test hardware playback, callback timing, stereo output, meter correctness, Windows compilation or WASAPI. The Windows workflow has been authored but not executed here. Godot 4.3 compatibility is targeted by the bindings and the Windows workflow; the local Godot run used 4.6.3.
+- Native debug build, with link-time checking for unresolved symbols.
+- CTest renderer tests: two-track summing, shared-clock advancement, mono/stereo mapping, stereo balance, gain, mute/solo, post-fader metering, clip offsets and gaps, pause/stop/seek fades, EOF/restart, 44.1-to-48 kHz conversion, downsampling alias suppression and pre-ceiling metering/output ceiling.
+- Renderer exercised under AddressSanitizer and UndefinedBehaviorSanitizer without reported errors.
+- Godot 4.3 and 4.6.3 headless imports without script errors.
+- Godot API tests on both versions: WAV/error recovery, source/session durations, offsets and invalid values, track limits and engine lifetime.
+- Godot UI tests on both versions: scene initialization, two track rows, WAV loading, adding a track, timeline offset synchronization, simulated clip dragging and cleanup.
+- Demo startup/shutdown in Godot 4.6.3 headless mode.
+- `git diff --check`.
 
-Windows build and manual acceptance steps are in README.md. Recording, multitrack playback and VST3 hosting are not implemented in this first milestone.
+The Linux build used `-DCMAKE_CXX_FLAGS="-DJUCE_ALSA=0 -DJUCE_JACK=0"` because ALSA development headers are absent. Offline tests call the exact mixer used by the JUCE callback but do not exercise an audio device. They do not establish hardware timing, drop-out performance, Windows compilation or WASAPI output. UI tests are headless and do not establish visual appearance on Windows.
+
+The Windows workflow now includes renderer and Godot integration tests; its current run has not been verified here. Manual Windows playback steps are in README.md. The user reported that the earlier single-file prototype worked on Windows; the multitrack update still needs that platform acceptance check.

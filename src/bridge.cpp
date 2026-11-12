@@ -14,47 +14,21 @@ static_assert(std::atomic<float>::is_always_lock_free, "Audio atomics must be lo
 static_assert(std::atomic<double>::is_always_lock_free, "Audio atomics must be lock free");
 static_assert(std::atomic<bool>::is_always_lock_free, "Audio atomics must be lock free");
 
-// All public methods are called on Godot's main thread. Only the callback owns cursor.
+#include "mixer.hpp"
+
+// All API methods run on Godot's main thread. Structural edits detach the callback.
 class JuceEngine : public godot::RefCounted, private juce::AudioIODeviceCallback {
  GDCLASS(JuceEngine, godot::RefCounted)
  juce::AudioDeviceManager devices;
- juce::AudioBuffer<float> clip;
- double source_rate = 44100.0, device_rate = 44100.0, cursor = 0.0;
- std::atomic<bool> playing{false};
- std::atomic<float> gain{0.5f}, left{0}, right{0};
- std::atomic<double> position{0};
- std::atomic<bool> rewind_requested{false};
+ bridge::Mixer mixer;
  bool attached = false;
- float previous_gain = 0.5f;
+ bool valid(int track) const { return track >= 0 && track < mixer.count; }
  void detach() { if (attached) { devices.removeAudioCallback(this); attached = false; } }
  void attach() { if (!attached && devices.getCurrentAudioDevice()) { devices.addAudioCallback(this); attached = true; } }
- void audioDeviceAboutToStart(juce::AudioIODevice* d) override { device_rate = d->getCurrentSampleRate(); }
- void audioDeviceStopped() override { left.store(0); right.store(0); }
+ void audioDeviceAboutToStart(juce::AudioIODevice* d) override { mixer.prepare(d->getCurrentSampleRate()); }
+ void audioDeviceStopped() override { mixer.left.store(0); mixer.right.store(0); }
  void audioDeviceIOCallbackWithContext(const float* const*, int, float* const* out, int channels, int frames, const juce::AudioIODeviceCallbackContext&) override {
-  for (int c=0;c<channels;++c) if(out[c]) juce::FloatVectorOperations::clear(out[c], frames);
-  if(rewind_requested.exchange(false)) cursor=0;
-  float peaks[2]={0,0};
-  const float target=gain.load();
-  const double step=source_rate/device_rate;
-  const int length=clip.getNumSamples();
-  if(playing.load() && length>0) {
-   for(int i=0;i<frames;++i) {
-    if(cursor>=length) { playing.store(false); break; }
-    const int a=static_cast<int>(cursor), b=std::min(a+1,length-1);
-    const float fraction=static_cast<float>(cursor-a);
-    const float volume=previous_gain+(target-previous_gain)*static_cast<float>(i+1)/frames;
-    for(int c=0;c<std::min(channels,2);++c) {
-     const float* data=clip.getReadPointer(std::min(c,clip.getNumChannels()-1));
-     const float value=(data[a]+(data[b]-data[a])*fraction)*volume;
-     if(out[c]) out[c][i]=value;
-     peaks[c]=std::max(peaks[c],std::abs(value));
-    }
-    cursor+=step;
-   }
-  }
-  previous_gain=target;
-  position.store(std::min(cursor,static_cast<double>(length))/source_rate);
-  left.store(peaks[0]); right.store(peaks[1]);
+  mixer.render(out, channels, frames);
  }
 protected:
  static void _bind_methods() {
@@ -64,9 +38,22 @@ protected:
   ClassDB::bind_method(D_METHOD("get_output_devices"), &JuceEngine::get_output_devices);
   ClassDB::bind_method(D_METHOD("select_output_device", "name"), &JuceEngine::select_output_device);
   ClassDB::bind_method(D_METHOD("load_wav", "absolute_path"), &JuceEngine::load_wav);
+  ClassDB::bind_method(D_METHOD("load_track_wav", "track", "absolute_path"), &JuceEngine::load_track_wav);
+  ClassDB::bind_method(D_METHOD("add_track"), &JuceEngine::add_track);
+  ClassDB::bind_method(D_METHOD("clear_track", "track"), &JuceEngine::clear_track);
+  ClassDB::bind_method(D_METHOD("get_track_count"), &JuceEngine::get_track_count);
+  ClassDB::bind_method(D_METHOD("get_track_duration", "track"), &JuceEngine::get_track_duration);
+  ClassDB::bind_method(D_METHOD("get_track_offset", "track"), &JuceEngine::get_track_offset);
+  ClassDB::bind_method(D_METHOD("set_track_offset", "track", "seconds"), &JuceEngine::set_track_offset);
+  ClassDB::bind_method(D_METHOD("set_track_volume", "track", "linear_gain"), &JuceEngine::set_track_volume);
+  ClassDB::bind_method(D_METHOD("set_track_pan", "track", "pan"), &JuceEngine::set_track_pan);
+  ClassDB::bind_method(D_METHOD("set_track_mute", "track", "muted"), &JuceEngine::set_track_mute);
+  ClassDB::bind_method(D_METHOD("set_track_solo", "track", "solo"), &JuceEngine::set_track_solo);
+  ClassDB::bind_method(D_METHOD("get_track_levels", "track"), &JuceEngine::get_track_levels);
   ClassDB::bind_method(D_METHOD("play"), &JuceEngine::play);
   ClassDB::bind_method(D_METHOD("pause"), &JuceEngine::pause);
   ClassDB::bind_method(D_METHOD("stop"), &JuceEngine::stop);
+  ClassDB::bind_method(D_METHOD("seek", "seconds"), &JuceEngine::seek);
   ClassDB::bind_method(D_METHOD("set_volume", "linear_gain"), &JuceEngine::set_volume);
   ClassDB::bind_method(D_METHOD("get_position"), &JuceEngine::get_position);
   ClassDB::bind_method(D_METHOD("get_duration"), &JuceEngine::get_duration);
@@ -81,7 +68,7 @@ public:
   if(error.isEmpty()) attach();
   return godot::String(error.toRawUTF8());
  }
- void shutdown() { playing.store(false); detach(); devices.closeAudioDevice(); }
+ void shutdown() { mixer.playing.store(false); detach(); devices.closeAudioDevice(); mixer.reset(); }
  godot::PackedStringArray get_output_devices() {
   godot::PackedStringArray result;
   if(auto* type=devices.getCurrentDeviceTypeObject()) {
@@ -100,37 +87,72 @@ public:
   attach();
   return godot::String(error.toRawUTF8());
  }
- godot::String load_wav(godot::String path) {
+ int get_track_count() const { return mixer.count; }
+ int add_track() {
+  if(mixer.count >= bridge::max_tracks) return -1;
+  detach();
+  const int index=mixer.count++;
+  attach();
+  return index;
+ }
+ godot::String load_wav(godot::String path) { return load_track_wav(0,path); }
+ godot::String load_track_wav(int track, godot::String path) {
+  if(!valid(track)) return "Invalid track index.";
   juce::WavAudioFormat format;
   auto stream=juce::File(juce::String::fromUTF8(path.utf8().get_data())).createInputStream();
   if(!stream) return "Cannot open file. Pass an absolute filesystem path.";
-  auto* raw=stream.release();
-  std::unique_ptr<juce::AudioFormatReader> reader(format.createReaderFor(raw,true));
+  std::unique_ptr<juce::AudioFormatReader> reader(format.createReaderFor(stream.release(),true));
   if(!reader) return "Not a supported WAV file.";
-  // MVP loads into memory. Bound decoded storage to 256 MiB, mono/stereo only.
-  if(reader->numChannels<1 || reader->numChannels>2 || reader->lengthInSamples<=0 || reader->lengthInSamples>33554432 || reader->sampleRate<=0)
+  if(reader->numChannels<1 || reader->numChannels>2 || reader->lengthInSamples<=0 || reader->lengthInSamples>33554432 || !std::isfinite(reader->sampleRate) || reader->sampleRate<=0)
    return "WAV must be mono/stereo and at most 33,554,432 frames.";
-  juce::AudioBuffer<float> next(static_cast<int>(reader->numChannels),static_cast<int>(reader->lengthInSamples));
-  if(!reader->read(&next,0,next.getNumSamples(),0,true,true)) return "WAV decoding failed.";
-  playing.store(false);
-  detach(); // Wait for any callback before changing storage or callback-owned state.
-  clip=std::move(next); source_rate=reader->sampleRate; cursor=0;
-  position.store(0); rewind_requested.store(false); left.store(0); right.store(0);
+  size_t bytes=static_cast<size_t>(reader->lengthInSamples)*reader->numChannels*sizeof(float);
+  for(int t=0;t<mixer.count;++t) if(t!=track)
+   for(const auto& channel:mixer.tracks[t].clip.samples) bytes+=channel.size()*sizeof(float);
+  if(bytes>256u*1024u*1024u) return "Total decoded audio limit is 256 MiB. Clear a track first.";
+  juce::AudioBuffer<float> decoded(static_cast<int>(reader->numChannels),static_cast<int>(reader->lengthInSamples));
+  if(!reader->read(&decoded,0,decoded.getNumSamples(),0,true,true)) return "WAV decoding failed.";
+  bridge::Clip next;
+  next.rate=reader->sampleRate; next.channels=static_cast<int>(reader->numChannels);
+  for(int c=0;c<next.channels;++c) next.samples[c].assign(decoded.getReadPointer(c),decoded.getReadPointer(c)+decoded.getNumSamples());
+  detach();
+  mixer.playing.store(false);
+  mixer.tracks[track].clip=std::move(next);
+  mixer.tracks[track].prepare(mixer.rate);
+  mixer.reset();
   attach();
   return {};
  }
- void play() {
-  if(clip.getNumSamples()==0 || !attached) return;
-  if(position.load()>=get_duration()) rewind_requested.store(true);
-  playing.store(true);
+ godot::String clear_track(int track) {
+  if(!valid(track)) return "Invalid track index.";
+  detach(); mixer.playing.store(false);
+  mixer.tracks[track].clip=bridge::Clip{};
+  mixer.reset(); attach(); return {};
  }
- void pause() { playing.store(false); }
- void stop() { playing.store(false); rewind_requested.store(true); position.store(0); }
- void set_volume(double value) { if(std::isfinite(value)) gain.store(static_cast<float>(std::clamp(value,0.0,1.0))); }
- double get_position() const { return position.load(); }
- double get_duration() const { return clip.getNumSamples()/source_rate; }
- bool is_playing() const { return playing.load(); }
- godot::Vector2 get_levels() const { return {left.load(),right.load()}; }
+ double get_track_duration(int track) const { return valid(track)?mixer.tracks[track].clip.duration():0; }
+ double get_track_offset(int track) const { return valid(track)?mixer.tracks[track].offset:0; }
+ godot::String set_track_offset(int track, double seconds) {
+  if(!valid(track) || !std::isfinite(seconds) || seconds<0 || seconds>86400) return "Offset must be finite, between 0 and 86400 seconds, on a valid track.";
+  detach(); mixer.playing.store(false); mixer.tracks[track].offset=seconds;
+  mixer.reset(); attach(); return {};
+ }
+ void set_track_volume(int track, double value) { if(valid(track)&&std::isfinite(value)) mixer.tracks[track].volume.store(static_cast<float>(std::clamp(value,0.0,1.0))); }
+ void set_track_pan(int track, double value) { if(valid(track)&&std::isfinite(value)) mixer.tracks[track].pan.store(static_cast<float>(std::clamp(value,-1.0,1.0))); }
+ void set_track_mute(int track, bool value) { if(valid(track)) mixer.tracks[track].mute.store(value); }
+ void set_track_solo(int track, bool value) { if(valid(track)) mixer.tracks[track].solo.store(value); }
+ godot::Vector2 get_track_levels(int track) const { return valid(track)?godot::Vector2(mixer.tracks[track].left.load(),mixer.tracks[track].right.load()):godot::Vector2(); }
+ void play() {
+  if(!attached || mixer.duration()<=0) return;
+  if(mixer.position.load()>=mixer.duration()) mixer.seek(0);
+  mixer.playing.store(true);
+ }
+ void pause() { mixer.playing.store(false); }
+ void stop() { mixer.stop(); }
+ void seek(double seconds) { mixer.seek(seconds); }
+ void set_volume(double value) { if(std::isfinite(value)) mixer.master.store(static_cast<float>(std::clamp(value,0.0,1.0))); }
+ double get_position() const { return mixer.position.load(); }
+ double get_duration() const { return mixer.duration(); }
+ bool is_playing() const { return mixer.playing.load(); }
+ godot::Vector2 get_levels() const { return {mixer.left.load(),mixer.right.load()}; }
 };
 
 static std::unique_ptr<juce::ScopedJuceInitialiser_GUI> juce_runtime;

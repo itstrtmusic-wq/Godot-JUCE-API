@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(GodotJuceBridge VERSION 0.1.0 LANGUAGES CXX)
+project(GodotJuceBridge VERSION 0.2.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 include(FetchContent)
@@ -29,4 +29,11 @@ endforeach()
 
 if(UNIX AND NOT APPLE)
  target_link_options(juce_bridge PRIVATE "-Wl,--no-undefined")
+endif()
+
+include(CTest)
+if(BUILD_TESTING)
+ add_executable(mixer_test tests/mixer_test.cpp)
+ target_include_directories(mixer_test PRIVATE src)
+ add_test(NAME mixer COMMAND mixer_test)
 endif()

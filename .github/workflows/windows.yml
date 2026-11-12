@@ -7,6 +7,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: cmake -S . -B build -A x64 -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build --config Release --parallel 2
+      - run: ctest --test-dir build -C Release --output-on-failure
       - name: Install Godot 4.3 and run integration tests
         shell: pwsh
         run: |
@@ -17,6 +18,8 @@ jobs:
           & $godot --headless --path demo --editor --import --quit
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $godot --headless --path demo --script res://tests/engine_test.gd
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $godot --headless --path demo --script res://tests/ui_test.gd
           exit $LASTEXITCODE
       - uses: actions/upload-artifact@v4
         with:
