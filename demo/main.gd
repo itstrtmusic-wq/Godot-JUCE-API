@@ -38,7 +38,7 @@ func _ready() -> void:
  picker.file_mode = FileDialog.FILE_MODE_OPEN_FILE
  picker.filters = PackedStringArray(["*.wav ; WAV audio"])
  add_child(picker)
- load_button.pressed.connect(func(): picker.popup_centered_ratio(0.8))
+ load_button.pressed.connect(func(): picker.popup_centered_ratio(0.95))
  picker.file_selected.connect(_load_file)
  var transport := HBoxContainer.new()
  panel.add_child(transport)
