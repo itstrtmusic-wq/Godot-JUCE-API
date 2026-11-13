@@ -193,6 +193,23 @@ func _create_row(track: int) -> void:
   toggle.toggled.connect(func(enabled: bool): session.tracks[track].set(item[1], enabled))
  var meter_l := _meter(controls)
  var meter_r := _meter(controls)
+ var eq_controls := HBoxContainer.new()
+ box.add_child(eq_controls)
+ _label(eq_controls, "EQ (dB)")
+ for band in [["Low 200 Hz", "low_gain_db"], ["Mid 1 kHz", "mid_gain_db"], ["High 6 kHz", "high_gain_db"]]:
+  _label(eq_controls, band[0])
+  var knob := SpinBox.new()
+  knob.min_value = -18
+  knob.max_value = 18
+  knob.step = 0.1
+  knob.value = audio.eq.get(band[1])
+  eq_controls.add_child(knob)
+  knob.value_changed.connect(func(value: float): session.tracks[track].eq.set(band[1], value))
+ var bypass := CheckButton.new()
+ bypass.text = "EQ bypass"
+ bypass.button_pressed = audio.eq.bypassed
+ eq_controls.add_child(bypass)
+ bypass.toggled.connect(func(value: bool): session.tracks[track].eq.bypassed = value)
  rows.append({"name": name_label, "offset": offset, "load": load_button, "meters": [meter_l, meter_r]})
 
 func _add_track() -> void:

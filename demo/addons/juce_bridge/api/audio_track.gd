@@ -1,11 +1,15 @@
 class_name AudioTrack
 extends RefCounted
 ## One track in an AudioSession. Create tracks with session.add_track().
+const EQ = preload("res://addons/juce_bridge/api/audio_eq.gd")
 signal loaded(path: String)
 signal load_failed(message: String)
 signal changed(property: StringName)
 signal levels_changed(levels: Vector2)
 
+var _eq: AudioEQ
+var eq: AudioEQ:
+ get: return _eq
 var _owner: WeakRef
 var _index := -1
 var _path := ""
@@ -75,6 +79,8 @@ func _attach(session: Node, native_index: int, label: String) -> void:
  _owner = weakref(session)
  _index = native_index
  _name = label
+ _eq = EQ.new()
+ _eq._attach(self)
 
 func _session():
  return _owner.get_ref() if _owner else null
@@ -122,3 +128,8 @@ func set_offset(seconds: float) -> String:
  session._structural_edit()
  changed.emit(&"offset")
  return ""
+
+func add_effect(effect_type: String) -> AudioEQ:
+ if effect_type.to_lower() == "eq": return _eq
+ _error("Unsupported effect: " + effect_type + ". Currently available: eq.")
+ return null

@@ -1,7 +1,7 @@
 extends RefCounted
 ## Versioned, data-only project files. No scripts or resources are deserialized.
 const FORMAT := "godot-juce-session"
-const VERSION := 1
+const VERSION := 2
 const MAX_FILE_BYTES := 1024 * 1024
 
 static func absolute(path: String) -> String:
@@ -12,7 +12,7 @@ static func number(value: Variant, low: float, high: float) -> bool:
 
 static func validate(data: Variant) -> String:
  if not data is Dictionary: return "Project must be a JSON object."
- if data.get("format") != FORMAT or not number(data.get("version"), VERSION, VERSION): return "Unsupported project format or version."
+ if data.get("format") != FORMAT or not number(data.get("version"), 1, VERSION) or (float(data.version) != 1.0 and float(data.version) != 2.0): return "Unsupported project format or version."
  if not number(data.get("master_volume"), 0, 1): return "Invalid master volume."
  var tracks: Variant = data.get("tracks")
  if not tracks is Array or tracks.size() > 16: return "Project must contain at most 16 tracks."
@@ -21,6 +21,12 @@ static func validate(data: Variant) -> String:
   if not item.get("name") is String or not item.get("file") is String: return "Track name and file must be strings."
   if not number(item.get("volume"), 0, 1) or not number(item.get("pan"), -1, 1) or not number(item.get("offset"), 0, 86400): return "Invalid track volume, pan, or offset."
   if not item.get("muted") is bool or not item.get("solo") is bool: return "Mute and solo must be booleans."
+  if data.version == 2 or item.has("eq"):
+   var eq: Variant = item.get("eq")
+   if not eq is Dictionary: return "Track EQ settings must be an object."
+   for band in ["low_gain_db", "mid_gain_db", "high_gain_db"]:
+    if not number(eq.get(band), -18, 18): return "EQ gains must be finite numbers between -18 and 18 dB."
+   if not eq.get("bypassed") is bool: return "EQ bypass must be a boolean."
  return ""
 
 static func write(path: String, data: Dictionary) -> String:

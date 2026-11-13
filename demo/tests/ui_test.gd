@@ -57,6 +57,8 @@ func run() -> void:
  demo.session.tracks[1].pan = -0.4
  demo.session.tracks[1].muted = true
  demo.session.master_volume = 0.27
+ demo.session.tracks[1].eq.low_gain_db = 5.5
+ demo.session.tracks[1].eq.bypassed = true
  demo._save_project(project_path)
  demo._add_track()
  demo._open_project(project_path)
@@ -71,6 +73,17 @@ func run() -> void:
   if control is CheckButton: toggles.append(control.button_pressed)
  check(sliders.size() == 2 and absf(sliders[0] - 0.33) < 0.000001 and absf(sliders[1] + 0.4) < 0.000001, "Track faders must reflect restored values")
  check(toggles == [true, false], "Mute/solo controls must reflect restored values")
+ var eq_controls = demo.track_panel.get_child(1).get_child(2)
+ var eq_knobs: Array[float] = []
+ var eq_bypassed := false
+ for control in eq_controls.get_children():
+  if control is SpinBox: eq_knobs.append(control.value)
+  if control is CheckButton: eq_bypassed = control.button_pressed
+ check(eq_knobs == [5.5, 0.0, 0.0] and eq_bypassed, "EQ controls restore from project")
+ # Editing the first and third controls routes to separate gain properties.
+ eq_controls.get_child(2).value = -4
+ eq_controls.get_child(6).value = 3
+ check(demo.session.tracks[1].eq.low_gain_db == -4 and demo.session.tracks[1].eq.high_gain_db == 3, "EQ controls address the correct bands")
  DirAccess.remove_absolute(ProjectSettings.globalize_path(project_path))
  demo.queue_free()
  await process_frame

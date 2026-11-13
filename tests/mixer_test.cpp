@@ -86,6 +86,14 @@ int main() {
   near(block.l.back(),0.2,1e-5,"Stereo balance must retain left channel");
   near(block.r.back(),0,1e-5,"Stereo balance must attenuate opposite channel");
 
+  m=session(); constant(*m,0,0.1f); constant(*m,1,0.3f);
+  m->tracks[0].eq.gains[0].store(6);
+  m->prepare(48000); m->playing.store(true); block.render(*m);
+  near(block.l.back(),0.3+0.1*std::pow(10.0,6.0/20),0.002,"EQ must process its own track before summing");
+  near(m->tracks[1].left.load(),0.3,1e-5,"Other track meter must remain unaffected by EQ");
+  m->tracks[0].eq.bypassed.store(true); block.render(*m);
+  near(block.l.back(),0.4,1e-5,"Track EQ bypass must return unprocessed mix");
+
   m=session(); constant(*m,0,1); constant(*m,1,1); m->prepare(48000); m->playing.store(true); block.render(*m);
   near(block.l.back(),1,1e-12,"Summed output must be safety-clamped");
   check(m->left.load()>1.9,"Master meter must expose overload before clamp");

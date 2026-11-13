@@ -1,6 +1,6 @@
 # Godot JUCE Audio Bridge
 
-A Windows x64 GDExtension for building a standalone audio application with a Godot interface and JUCE device output. The current version includes a multitrack mixer, basic timeline, and a GDScript API. It is an early DAW foundation; recording, MIDI and plug-in hosting are still to come.
+A Windows x64 GDExtension for building a standalone audio application with a Godot interface and JUCE device output. The current version includes a multitrack mixer, basic timeline, native three-band track EQ, and a GDScript API. It is an early DAW foundation; recording, MIDI and plug-in hosting are still to come.
 
 ## GDScript API — no C++ required for your interface
 
@@ -17,7 +17,7 @@ if drums and drums.load_wav("C:/Audio/drums.wav").is_empty():
     daw.play()
 ```
 
-See **[the GDScript API guide](docs/GDSCRIPT_API.md)** for error handling, device selection, all properties/signals, and a complete starter script. The demo now uses this layer. Copy the whole add-on, including its `api` folder and DLL. Existing multitrack DLLs remain compatible; the GDScript layer adds no native audio callbacks. Audio runs in C++, and UI notifications arrive on Godot's main thread.
+See **[the GDScript API guide](docs/GDSCRIPT_API.md)** for error handling, device selection, all properties/signals, and a complete starter script. The demo now uses this layer. Copy the whole add-on, including its `api` folder and DLL. **The EQ update requires rebuilding the native DLL.** Close Godot before rebuilding; older multitrack DLLs are detected and reported by the API. Audio runs in C++, and UI notifications arrive on Godot's main thread.
 
 ## Build on Windows
 
@@ -43,13 +43,13 @@ Open `demo/project.godot` in Godot and press **F5**.
 3. Press **Play**. Both tracks share one audio clock and transport.
 4. Click the timeline or use the transport slider to seek. Click a clip without dragging to seek there.
 5. Drag a clip horizontally, or set its **Start (s)** field, to place it later in the session.
-6. Adjust each track's volume, stereo balance/pan, mute and solo. Add tracks up to the limit of 16.
+6. Adjust volume, pan, mute/solo, and the track's low/mid/high EQ gains or bypass. Add tracks up to the limit of 16.
 
 Loading, clearing and moving clips stops and rewinds the session. Failed loads preserve the existing audio. Pause preserves position after a short fade; Stop fades then rewinds. Playback stops at the last loaded clip's end, including its offset. Pressing Play at the end restarts the session. Several soloed tracks play together; mute takes precedence over solo. Soloing an empty track can silence other tracks.
 
 Track meters show stereo peaks after the track controls and before the master. Master meters show peaks before the output safety ceiling. A clipping message means the summed signal exceeded 1.0: lower the master or track volumes. The output ceiling is hard clipping protection, not a transparent limiter. Start with the default master gain of 50%.
 
-Use **Save project…** and **Open project…** to save/reopen `.gjproject` sessions. Track names, audio references, offsets, volume/pan/mute/solo and master volume are restored. WAVs are referenced, not embedded; keep them available. Opening a project stops/rewinds transport and replaces track handles. Malformed projects and missing WAVs leave the loaded session intact. See the API guide for staging-memory and device-reopen behavior.
+Use **Save project…** and **Open project…** to save/reopen `.gjproject` sessions. Track names, audio references, offsets, volume/pan/mute/solo, EQ settings and master volume are restored. WAVs are referenced, not embedded; keep them available. Opening a project stops/rewinds transport and replaces track handles. Malformed projects and missing WAVs leave the loaded session intact. See the API guide for staging-memory and device-reopen behavior.
 
 The Windows backend is JUCE's default WASAPI implementation. The device menu lists outputs for that backend. Backend selection and ASIO are not included.
 
@@ -101,6 +101,8 @@ Track indices are zero-based and stable. Two empty tracks exist initially; there
 | `clear_track(track)` | Remove clip, retaining track controls and offset; empty string or error |
 | `set_track_offset(track, seconds)` | Offset between 0 and 86400 seconds; stops/rewinds; empty string or error |
 | `get_track_offset(track)` / `get_track_duration(track)` | Clip start / source duration, in seconds |
+| `set_track_eq_gain(track, band, gain_db)` | Band 0 low / 1 mid / 2 high; gains clamp to -18…+18 dB |
+| `set_track_eq_bypassed(track, bypassed)` | Smooth dry/EQ bypass |
 | `set_track_volume(track, gain)` | Linear gain, clamped to 0–1 |
 | `set_track_pan(track, pan)` | -1 left, 0 center, +1 right; attenuates the opposite channel, center unity |
 | `set_track_mute(track, muted)` / `set_track_solo(track, solo)` | Smoothed audibility controls |
@@ -112,6 +114,18 @@ Track indices are zero-based and stable. Two empty tracks exist initially; there
 | `set_volume(gain)` / `get_levels()` | Master gain 0–1 / pre-ceiling stereo peaks |
 
 Initialization returns an empty string or error. Invalid track indices return errors for clip/offset operations, zero for numeric getters and levels, and are ignored by mixer setters. Nonfinite gain/pan and seek requests are ignored. Volume/pan controls are clamped. Transport position reflects completed audio processing, so a seek or Stop appears after processing its short fade; it is not a synchronous position setter. Without an active device, transport commands have no callback to process them.
+
+## Track EQ from GDScript
+
+```gdscript
+var eq = drums.add_effect("eq") # Same object as drums.eq; one EQ per track.
+eq.low_gain_db = -3.0
+eq.mid_gain_db = 2.0
+eq.high_gain_db = 1.5
+eq.bypassed = false
+```
+
+The native EQ uses a 200 Hz low shelf, a 1 kHz bell, and a 6 kHz high shelf, with -18 to +18 dB gain per band. Parameters and bypass ramp over about 10 ms. Boosts can overload the mix; lower track/master gain if the clipping indicator appears. The EQ runs in C++ on JUCE's audio thread, before the track fader/pan. It is a fixed engine processor, not arbitrary JUCE DSP class binding or an effect-chain host. See the guide for limits and project format migration.
 
 ## Audio design and limits
 

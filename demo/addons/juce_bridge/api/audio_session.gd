@@ -53,9 +53,9 @@ func _ensure_engine() -> String:
  if not ClassDB.class_exists("JuceEngine"):
   return "JUCE engine missing. Build the GDExtension and reopen Godot."
  _engine = ClassDB.instantiate("JuceEngine")
- if not _engine.has_method("load_track_wav"):
+ if not _engine.has_method("set_track_eq_gain"):
   _engine = null
-  return "Old JUCE engine detected. Close Godot, rebuild the DLL, and reopen."
+  return "EQ engine update required. Close Godot, rebuild the DLL, and reopen."
  _engine.set_volume(_master)
  return ""
 
@@ -171,7 +171,7 @@ func save_project(path: String) -> String:
    var prefix := target.get_base_dir().trim_suffix("/") + "/"
    if audio_path.begins_with(prefix): audio_path = audio_path.trim_prefix(prefix)
   items.append({"name": track.track_name, "file": audio_path, "volume": track.volume,
-   "pan": track.pan, "muted": track.muted, "solo": track.solo, "offset": track.offset})
+   "pan": track.pan, "muted": track.muted, "solo": track.solo, "offset": track.offset, "eq": track.eq._settings()})
  var error: String = ProjectFile.write(path, {"format": ProjectFile.FORMAT, "version": ProjectFile.VERSION, "master_volume": _master, "tracks": items})
  if not error.is_empty(): return _report(error)
  project_saved.emit(path)
@@ -183,6 +183,10 @@ func load_project(path: String) -> String:
  var staged = _create_project_session()
  staged.auto_initialize = false
  staged.master_volume = result.data.master_volume
+ var staged_error: String = staged._ensure_engine()
+ if not staged_error.is_empty():
+  staged.free()
+  return _report(staged_error)
  # Decode all referenced files into a separate, unopened engine. Errors leave
  # the running session and its track handles untouched.
  for item in result.data.tracks:
@@ -203,6 +207,11 @@ func load_project(path: String) -> String:
   track.muted = item.muted
   track.solo = item.solo
   track.offset = item.offset
+  if item.has("eq"):
+   track.eq.low_gain_db = item.eq.low_gain_db
+   track.eq.mid_gain_db = item.eq.mid_gain_db
+   track.eq.high_gain_db = item.eq.high_gain_db
+   track.eq.bypassed = item.eq.bypassed
  var engine_error: String = staged._ensure_engine()
  if not engine_error.is_empty():
   staged.free()

@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cmath>
 #include <vector>
+#include "eq.hpp"
 
 namespace bridge {
 constexpr int max_tracks = 16;
@@ -16,6 +17,7 @@ struct Clip {
 };
 struct Track {
  Clip clip;
+ Equalizer eq;
  double offset = 0; // Only changed with audio callback detached.
  std::atomic<float> volume{1}, pan{0}, left{0}, right{0};
  std::atomic<bool> mute{false}, solo{false};
@@ -24,6 +26,7 @@ struct Track {
  static constexpr int phases = 256, taps = 32;
  std::array<std::array<float, taps>, phases> kernel{};
  void prepare(double output_rate) {
+  eq.prepare(output_rate);
   const double cutoff = 0.95 * std::min(1.0, output_rate / clip.rate);
   for (int p = 0; p < phases; ++p) {
    double sum = 0;
@@ -85,7 +88,7 @@ public:
   cursor = std::clamp(seconds, 0.0, duration()); position.store(cursor);
   seek_request.store(-1); pending_seek = -1; envelope = 0;
   left.store(0); right.store(0);
-  for (auto& track : tracks) { track.left.store(0); track.right.store(0); }
+  for (auto& track : tracks) { track.left.store(0); track.right.store(0); track.eq.reset(); }
  }
  void render(float* const* outputs, int channels, int frames) {
   for (int c = 0; c < channels; ++c) if (outputs[c]) std::fill_n(outputs[c], frames, 0.0f);
@@ -98,6 +101,7 @@ public:
   for (int t = 0; t < count; ++t) any_solo |= tracks[t].solo.load();
   for (int t = 0; t < count; ++t) {
    auto& track = tracks[t];
+   track.eq.begin_block();
    float volume = track.mute.load() || (any_solo && !track.solo.load()) ? 0 : track.volume.load();
    const float pan = track.pan.load();
    target_l[t] = volume * static_cast<float>(pan > 0 ? std::cos(pan * pi / 2) : 1);
@@ -108,8 +112,9 @@ public:
   for (int i = 0; i < frames; ++i) {
    if (pending_seek >= 0 && envelope <= 0) {
     cursor = std::clamp(pending_seek, 0.0, end); pending_seek = -1;
+    for(int t=0;t<count;++t) tracks[t].eq.reset();
    }
-   if (cursor >= end && pending_seek >= 0) { cursor = std::clamp(pending_seek, 0.0, end); pending_seek = -1; envelope = 0; }
+   if (cursor >= end && pending_seek >= 0) { cursor = std::clamp(pending_seek, 0.0, end); pending_seek = -1; envelope = 0; for(int t=0;t<count;++t) tracks[t].eq.reset(); }
    if (cursor >= end) playing.store(false);
    const bool active = playing.load();
    const float target = active && pending_seek < 0 ? 1.0f : 0.0f;
@@ -121,12 +126,13 @@ public:
     track.current_left = move(track.current_left, target_l[t], step);
     track.current_right = move(track.current_right, target_r[t], step);
     const double local = cursor - track.offset;
-    if (!track.clip.channels || local < 0 || local >= track.clip.duration() || envelope <= 0) continue;
+    if (!track.clip.channels || local < 0 || local >= track.clip.duration() || envelope <= 0) { track.eq.reset(); continue; }
     // Short clip-edge fades also soften boundaries when clips start at different offsets.
     const float edge = static_cast<float>(std::clamp(std::min(local, track.clip.duration() - local) / 0.005, 0.0, 1.0));
     const double frame = local * track.clip.rate;
-    const float l = track.sample(0, frame, rate) * track.current_left * edge * static_cast<float>(envelope);
-    const float r = track.sample(1, frame, rate) * track.current_right * edge * static_cast<float>(envelope);
+    const auto filtered = track.eq.process(track.sample(0, frame, rate)*edge, track.sample(1, frame, rate)*edge);
+    const float l = filtered[0] * track.current_left * static_cast<float>(envelope);
+    const float r = filtered[1] * track.current_right * static_cast<float>(envelope);
     mixed_l += l; mixed_r += r;
     peak_l[t] = std::max(peak_l[t], std::abs(l)); peak_r[t] = std::max(peak_r[t], std::abs(r));
    }
@@ -139,7 +145,7 @@ public:
   }
   if (cursor >= end) playing.store(false);
   // A paused seek/stop is completed within this block once its fade has ended.
-  if (pending_seek >= 0 && envelope <= 0) { cursor = std::clamp(pending_seek, 0.0, end); pending_seek = -1; }
+  if (pending_seek >= 0 && envelope <= 0) { cursor = std::clamp(pending_seek, 0.0, end); pending_seek = -1; for(int t=0;t<count;++t) tracks[t].eq.reset(); }
   position.store(cursor); left.store(master_l); right.store(master_r);
   for (int t = 0; t < count; ++t) { tracks[t].left.store(peak_l[t]); tracks[t].right.store(peak_r[t]); }
  }

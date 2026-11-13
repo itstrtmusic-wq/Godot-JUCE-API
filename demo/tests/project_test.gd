@@ -53,6 +53,10 @@ func run() -> void:
  first.muted = true
  first.solo = true
  first.offset = 1.25
+ first.eq.low_gain_db = 4.0
+ first.eq.mid_gain_db = -2.5
+ first.eq.high_gain_db = 6.0
+ first.eq.bypassed = true
  var empty: AudioTrack = session.add_track("Empty track")
  empty.track_name = ""
  empty.offset = 2.0
@@ -72,6 +76,7 @@ func run() -> void:
  check(session.tracks.size() == 2 and session.tracks[0].track_name == "Drums", "Track order and names restored")
  var restored: AudioTrack = session.tracks[0]
  check(absf(restored.volume - 0.7) < 0.000001 and absf(restored.pan + 0.3) < 0.000001, "Mixer values restored")
+ check(restored.eq.low_gain_db == 4.0 and restored.eq.mid_gain_db == -2.5 and restored.eq.high_gain_db == 6.0 and restored.eq.bypassed, "EQ settings round trip")
  check(restored.muted and restored.solo, "Mute and solo restored")
  check(absf(restored.offset - 1.25) < 0.000001 and absf(restored.duration - 0.1) < 0.000001, "Clip offset and audio restored")
  check(session.tracks[1].track_name.is_empty(), "Explicit empty track names must round trip")
@@ -79,6 +84,8 @@ func run() -> void:
  check(absf(session.master_volume - 0.45) < 0.000001 and session.state == &"stopped", "Master restored and transport stopped")
  check(first.duration == 0, "Replaced track handles must detach")
  first.volume = 0.9
+ first.eq.low_gain_db = -18
+ check(restored.eq.low_gain_db == 4, "Old EQ handles cannot alter replacement tracks")
  check(absf(restored.volume - 0.7) < 0.000001, "Old handles cannot alter new tracks")
  var native = session._engine
  var invalid: Dictionary = original.duplicate(true)
@@ -94,6 +101,14 @@ func run() -> void:
  for text in ["{", "[]", '{"format":"wrong","version":1}', " ".repeat(1024 * 1024 + 1)]:
   write(bad, text)
   check(not session.load_project(bad).is_empty(), "Malformed/oversize project must fail")
+ invalid = original.duplicate(true)
+ invalid.tracks[0].eq.low_gain_db = 99
+ write(bad, invalid)
+ check(not session.load_project(bad).is_empty(), "Invalid EQ range must fail")
+ invalid = original.duplicate(true)
+ invalid.tracks[0].erase("eq")
+ write(bad, invalid)
+ check(not session.load_project(bad).is_empty(), "Version 2 requires EQ settings")
  invalid = original.duplicate(true)
  invalid.version = 99
  write(bad, invalid)
@@ -119,6 +134,13 @@ func run() -> void:
  restored.track_name = "Drums"
  check(not session.save_project(folder.path_join("absent/sub/project.gjproject")).is_empty(), "Unwritable destination returns error")
  check(not session.save_project("relative.gjproject").is_empty(), "Relative project destination must fail safely")
+ # Version 1 projects migrate to flat EQ, even if replacing an adjusted EQ.
+ var legacy: Dictionary = original.duplicate(true)
+ legacy.version = 1
+ for item in legacy.tracks: item.erase("eq")
+ write(bad, legacy)
+ check(session.load_project(bad).is_empty(), "Version 1 project must load")
+ check(session.tracks[0].eq.low_gain_db == 0 and not session.tracks[0].eq.bypassed, "Legacy project gets neutral EQ")
  # Empty sessions are valid projects.
  write(bad, {"format": "godot-juce-session", "version": 1, "master_volume": 0.5, "tracks": []})
  check(session.load_project(bad).is_empty() and session.tracks.is_empty(), "Empty session round trip")

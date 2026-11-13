@@ -30,6 +30,8 @@ class FakeEngine extends RefCounted:
  func set_track_pan(index: int, value: float) -> void: commands.append(["pan", index, value])
  func set_track_mute(index: int, value: bool) -> void: commands.append(["mute", index, value])
  func set_track_solo(index: int, value: bool) -> void: commands.append(["solo", index, value])
+ func set_track_eq_gain(index: int, band: int, value: float) -> void: commands.append(["eq", index, band, value])
+ func set_track_eq_bypassed(index: int, value: bool) -> void: commands.append(["eq_bypass", index, value])
  func select_output_device(device: String) -> String: return "Bad device" if device == "bad" else ""
  func get_output_devices() -> PackedStringArray: return PackedStringArray(["Test output"])
 
@@ -98,6 +100,18 @@ func run() -> void:
  session.initialize()
  check(events.count(["ready", true]) == 1, "Idempotent initialize must not duplicate signals")
  track = session.add_track("Synth")
+ var eq: AudioEQ = track.add_effect("eq")
+ check(eq == track.eq and track.add_effect("EQ") == eq, "Each track has exactly one EQ object")
+ eq.low_gain_db = 4.5
+ eq.mid_gain_db = -25
+ eq.high_gain_db = 99
+ eq.low_gain_db = NAN
+ eq.bypassed = true
+ check(fake.commands.has(["eq", 0, 0, 4.5]) and fake.commands.has(["eq", 0, 1, -18.0]) and fake.commands.has(["eq", 0, 2, 18.0]), "EQ properties route and clamp gains")
+ check(eq.low_gain_db == 4.5 and fake.commands.has(["eq_bypass", 0, true]), "EQ ignores nonfinite gains and routes bypass")
+ check(track.add_effect("compressor") == null, "Unsupported effects report failure")
+ eq.reset()
+ check(eq.low_gain_db == 0 and eq.mid_gain_db == 0 and eq.high_gain_db == 0 and not eq.bypassed, "EQ reset restores defaults")
  track.volume = 0.25
  track.volume = NAN
  track.pan = -2

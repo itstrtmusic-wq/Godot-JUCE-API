@@ -1,6 +1,6 @@
 # Build an audio interface entirely in GDScript
 
-Copy the complete `demo/addons/juce_bridge` directory into your project, including the Windows DLL and `api` scripts. Godot discovers the `AudioSession` and `AudioTrack` classes when it imports the project. There is no EditorPlugin checkbox or autoload requirement. This API works with the existing multitrack (0.2) native engine; the API layer itself does not require C++ changes.
+Copy the complete `demo/addons/juce_bridge` directory into your project, including the Windows DLL and `api` scripts. Godot discovers the `AudioSession` and `AudioTrack` classes when it imports the project. There is no EditorPlugin checkbox or autoload requirement. **The EQ milestone requires the updated native DLL (0.3). Close Godot, rebuild using the README, then reopen.** Older multitrack DLLs are detected with a rebuild message.
 
 Attach this script to a Node. Set the exported WAV paths in the Inspector, or use absolute paths from your own file picker:
 
@@ -94,6 +94,7 @@ You can also leave `auto_initialize` enabled (the default). In that case, connec
 
 | Property | Meaning |
 |---|---|
+| `eq` | Read-only AudioEQ object; parameters below |
 | `track_name` | Read/write display name, independent of file name |
 | `volume` | Read/write 0–1, default 1 |
 | `pan` | Read/write -1 left to +1 right, default 0; stereo balance |
@@ -103,6 +104,8 @@ You can also leave `auto_initialize` enabled (the default). In that case, connec
 | `levels` | Read-only post-track / pre-master stereo peaks |
 | `file_path` | Read-only last successfully loaded path, empty after clear |
 | `index` | Read-only stable native track index |
+
+The method `add_effect("eq")` returns the same object as `track.eq`. Calling it again does not stack another EQ. Other effect types return null and emit `audio_error`.
 
 Methods: `load_wav(path)`, `clear()`, and `set_offset(seconds)` return an empty string on success or an error string. Use `set_offset()` when you need to check its return value. Failed loads leave the previous clip and `file_path` intact. Loading and clearing stop/rewind the session; they retain mixer properties and offset.
 
@@ -142,7 +145,7 @@ daw.project_loaded.connect(func(path: String):
 daw.load_project("user://my-song.gjproject")
 ```
 
-`save_project(path)` saves track names/order, WAV references, offsets, volume, pan, mute, solo and master volume in versioned JSON. It does not change transport or copy audio. Files beneath the project directory use relative references; other audio keeps absolute references. Keep the WAVs available, or move the project folder together with its referenced audio. Projects are not self-contained audio bundles. Playback position, playing/paused state and audio-device preferences are not serialized.
+`save_project(path)` saves track names/order, WAV references, offsets, volume, pan, mute, solo, EQ gain/bypass and master volume in versioned JSON. It does not change transport or copy audio. Files beneath the project directory use relative references; other audio keeps absolute references. Keep the WAVs available, or move the project folder together with its referenced audio. Projects are not self-contained audio bundles. Playback position, playing/paused state and audio-device preferences are not serialized.
 
 `load_project(path)` validates the entire project and decodes its referenced WAVs in an unopened staging engine before replacing your session. A malformed project, missing/invalid WAV, or decode limit failure leaves existing track objects and audio untouched. A successful load starts stopped at zero and replaces all track objects. Old retained handles are detached, as if their session were gone. Listen to `project_loaded(path)` and reacquire `daw.tracks`; restored tracks do not individually emit `track_added` or `loaded`. `session_changed` also fires after the successful replacement. `project_saved(path)` fires only after a successful save.
 
@@ -162,7 +165,28 @@ Only the bindings provided by this add-on are callable; importing JUCE does not 
 | Notifications | Main-thread loading/error/state/completion/meter signals |
 | Project files | Save/load through GDScript; this is an add-on feature, not a JUCE callback |
 | Input recording, MIDI, VST3 hosting | Not yet exposed |
-| JUCE DSP/effect processors | Not yet exposed; no GDScript real-time audio processing callback |
+| Native effects | One three-band EQ per track; general JUCE DSP classes and other effects are not exposed |
 | JUCE GUI components or arbitrary JUCE classes | Not exposed; build the interface with Godot |
 
 We can extend this surface with dedicated GDScript-facing objects as those engine capabilities are implemented.
+
+
+## AudioEQ: native three-band track EQ
+
+```gdscript
+var eq: AudioEQ = drums.add_effect("eq")
+eq.changed.connect(func(property: StringName): print("EQ edited: ", property))
+eq.low_gain_db = -3.0
+eq.mid_gain_db = 2.0
+eq.high_gain_db = 4.0
+eq.bypassed = false
+# eq.reset() returns gains to 0 dB and bypass to false.
+```
+
+All three gain properties default to 0 dB, clamp finite inputs to -18…+18 dB, and ignore nonfinite input. `bypassed` defaults to false; flat settings are neutral. `changed(property)` is a synchronous main-thread signal, following the same rule as AudioTrack properties. EQ handles hold weak references to their track, so old handles cannot affect replacement tracks after project load/session deletion.
+
+The fixed bands are a low shelf at 200 Hz, a mid bell at 1 kHz (Q approximately 0.707), and a high shelf at 6 kHz. At output sample rates too low for those frequencies, each frequency is capped at 40% of the output rate. Frequency/Q editing, compressors, reverb, effect reordering and plug-in hosting are not implemented in this milestone.
+
+DSP uses normalized RBJ cookbook biquads with separate stereo histories, before track volume/pan and master output. This is a custom C++ processor in the JUCE-backed engine, not a generic wrapper around `juce::dsp`. Coefficients and wet/dry bypass transition over approximately 10 ms of active source processing. Filters keep processing during bypass; seeks, resets and inactive clip boundaries clear history. There are no filter tails beyond the clip or session end. Boosts can clip the master output: use the pre-ceiling meter and reduce gain. Audio processing remains entirely native; GDScript properties only publish parameters.
+
+New saves use project format **version 2**, including EQ settings on every track. Version 1 projects still load, with neutral EQ if no settings exist. Version 2 validates EQ types/ranges before staging audio. Older application versions cannot open version 2 files; keep a copy of an older project if you need to open it with older code.

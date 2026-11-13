@@ -49,6 +49,8 @@ protected:
   ClassDB::bind_method(D_METHOD("set_track_pan", "track", "pan"), &JuceEngine::set_track_pan);
   ClassDB::bind_method(D_METHOD("set_track_mute", "track", "muted"), &JuceEngine::set_track_mute);
   ClassDB::bind_method(D_METHOD("set_track_solo", "track", "solo"), &JuceEngine::set_track_solo);
+  ClassDB::bind_method(D_METHOD("set_track_eq_gain", "track", "band", "gain_db"), &JuceEngine::set_track_eq_gain);
+  ClassDB::bind_method(D_METHOD("set_track_eq_bypassed", "track", "bypassed"), &JuceEngine::set_track_eq_bypassed);
   ClassDB::bind_method(D_METHOD("get_track_levels", "track"), &JuceEngine::get_track_levels);
   ClassDB::bind_method(D_METHOD("play"), &JuceEngine::play);
   ClassDB::bind_method(D_METHOD("pause"), &JuceEngine::pause);
@@ -135,6 +137,11 @@ public:
   detach(); mixer.playing.store(false); mixer.tracks[track].offset=seconds;
   mixer.reset(); attach(); return {};
  }
+ void set_track_eq_gain(int track, int band, double db) {
+  if(valid(track) && band>=0 && band<3 && std::isfinite(db))
+   mixer.tracks[track].eq.gains[band].store(static_cast<float>(std::clamp(db,-18.0,18.0)));
+ }
+ void set_track_eq_bypassed(int track, bool value) { if(valid(track)) mixer.tracks[track].eq.bypassed.store(value); }
  void set_track_volume(int track, double value) { if(valid(track)&&std::isfinite(value)) mixer.tracks[track].volume.store(static_cast<float>(std::clamp(value,0.0,1.0))); }
  void set_track_pan(int track, double value) { if(valid(track)&&std::isfinite(value)) mixer.tracks[track].pan.store(static_cast<float>(std::clamp(value,-1.0,1.0))); }
  void set_track_mute(int track, bool value) { if(valid(track)) mixer.tracks[track].mute.store(value); }
