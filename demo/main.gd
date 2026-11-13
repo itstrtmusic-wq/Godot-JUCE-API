@@ -1,6 +1,7 @@
 extends Control
 const Timeline = preload("res://timeline.gd")
-var engine: Object
+const Session = preload("res://addons/juce_bridge/api/audio_session.gd")
+var session: AudioSession
 var ready_audio := false
 var status: Label
 var time_label: Label
@@ -33,24 +34,24 @@ func _ready() -> void:
  device_list = OptionButton.new()
  panel.add_child(device_list)
  device_list.item_selected.connect(func(index: int):
-  var error: String = engine.call("select_output_device", device_list.get_item_text(index))
+  var error: String = session.select_output_device(device_list.get_item_text(index))
   status.text = "Output changed." if error.is_empty() else error)
  var controls := HBoxContainer.new()
  panel.add_child(controls)
- transport.append(_button(controls, "Play", func(): engine.call("play")))
- transport.append(_button(controls, "Pause", func(): engine.call("pause")))
- transport.append(_button(controls, "Stop", func(): engine.call("stop")))
+ transport.append(_button(controls, "Play", func(): session.play()))
+ transport.append(_button(controls, "Pause", func(): session.pause()))
+ transport.append(_button(controls, "Stop", func(): session.stop()))
  add_button = _button(controls, "Add track", _add_track)
  time_label = _label(controls, "0.00 / 0.00 seconds")
  seek_slider = _slider(panel, 0, 10, 0, func(value: float):
-  if engine and not syncing: engine.call("seek", value))
+  if session and not syncing: session.seek(value))
  seek_slider.drag_started.connect(func(): seek_dragging = true)
  seek_slider.drag_ended.connect(func(_changed: bool): seek_dragging = false)
  var master := HBoxContainer.new()
  panel.add_child(master)
  _label(master, "Master")
  _slider(master, 0, 1, 0.5, func(value: float):
-  if engine: engine.call("set_volume", value))
+  if session: session.master_volume = value)
  for channel in ["L", "R"]:
   _label(master, channel)
   master_meters.append(_meter(master))
@@ -66,7 +67,7 @@ func _ready() -> void:
  timeline = Timeline.new()
  content.add_child(timeline)
  timeline.seek_requested.connect(func(seconds: float):
-  if ready_audio: engine.call("seek", seconds))
+  if ready_audio: session.seek(seconds))
  timeline.clip_moved.connect(_move_clip)
  track_panel = VBoxContainer.new()
  track_panel.add_theme_constant_override("separation", 14)
@@ -77,18 +78,17 @@ func _ready() -> void:
  picker.filters = PackedStringArray(["*.wav ; WAV audio"])
  add_child(picker)
  picker.file_selected.connect(_load_file)
- if not ClassDB.class_exists("JuceEngine"):
-  _unavailable("Native engine missing. Build the updated GDExtension, then reopen Godot.")
-  return
- engine = ClassDB.instantiate("JuceEngine")
- if not engine.has_method("load_track_wav"):
-  _unavailable("Old engine DLL detected. Close Godot, rebuild the extension, and reopen.")
-  engine = null
-  return
- var error: String = engine.call("initialize")
+ session = Session.new()
+ session.auto_initialize = false
+ add_child(session)
+ session.audio_error.connect(func(message: String): status.text = message)
+ session.playback_finished.connect(func(): status.text = "Playback finished.")
+ var error: String = session.initialize()
  ready_audio = error.is_empty()
- for track in range(engine.call("get_track_count")): _create_row(track)
- for device in engine.call("get_output_devices"): device_list.add_item(device)
+ for number in range(2):
+  var track := session.add_track()
+  if track: _create_row(track.index)
+ for device in session.get_output_devices(): device_list.add_item(device)
  device_list.select(-1)
  device_list.text = "Output device (system default)"
  if not ready_audio:
@@ -152,7 +152,7 @@ func _create_row(track: int) -> void:
  name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
  name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
  _button(header, "Clear", func():
-  var error: String = engine.call("clear_track", track)
+  var error: String = session.tracks[track].clear()
   if error.is_empty():
    rows[track].name.text = "Empty"
    _refresh_timeline()
@@ -168,36 +168,36 @@ func _create_row(track: int) -> void:
  offset.value_changed.connect(func(value: float):
   if not syncing: _move_clip(track, value))
  _label(controls, "Volume")
- _slider(controls, 0, 1, 1, func(value: float): engine.call("set_track_volume", track, value))
+ _slider(controls, 0, 1, 1, func(value: float): session.tracks[track].volume = value)
  _label(controls, "Pan L / R")
- _slider(controls, -1, 1, 0, func(value: float): engine.call("set_track_pan", track, value))
- for item in [["Mute", "set_track_mute"], ["Solo", "set_track_solo"]]:
+ _slider(controls, -1, 1, 0, func(value: float): session.tracks[track].pan = value)
+ for item in [["Mute", "muted"], ["Solo", "solo"]]:
   var toggle := CheckButton.new()
   toggle.text = item[0]
   controls.add_child(toggle)
-  toggle.toggled.connect(func(enabled: bool): engine.call(item[1], track, enabled))
+  toggle.toggled.connect(func(enabled: bool): session.tracks[track].set(item[1], enabled))
  var meter_l := _meter(controls)
  var meter_r := _meter(controls)
  rows.append({"name": name_label, "offset": offset, "load": load_button, "meters": [meter_l, meter_r]})
 
 func _add_track() -> void:
- var index: int = engine.call("add_track")
- if index < 0:
+ var track := session.add_track()
+ if not track:
   status.text = "Track limit reached (16)."
   return
- _create_row(index)
+ _create_row(track.index)
  add_button.disabled = rows.size() >= 16
  _refresh_timeline()
 
 func _load_file(path: String) -> void:
- var error: String = engine.call("load_track_wav", selected_track, path)
+ var error: String = session.tracks[selected_track].load_wav(path)
  if error.is_empty():
   rows[selected_track].name.text = path.get_file()
   _refresh_timeline()
  status.text = "Loaded " + path.get_file() if error.is_empty() else error
 
 func _move_clip(track: int, seconds: float) -> void:
- var error: String = engine.call("set_track_offset", track, seconds)
+ var error: String = session.tracks[track].set_offset(seconds)
  status.text = "Clip moved." if error.is_empty() else error
  _refresh_timeline()
 
@@ -207,32 +207,31 @@ func _refresh_timeline() -> void:
  timeline.offsets.clear()
  timeline.names.clear()
  for track in range(rows.size()):
-  timeline.lengths.append(engine.call("get_track_duration", track))
-  timeline.offsets.append(engine.call("get_track_offset", track))
+  timeline.lengths.append(session.tracks[track].duration)
+  timeline.offsets.append(session.tracks[track].offset)
   timeline.names.append(rows[track].name.text)
-  rows[track].offset.value = engine.call("get_track_offset", track)
- timeline.span = maxf(10, engine.call("get_duration") * 1.15)
+  rows[track].offset.value = session.tracks[track].offset
+ timeline.span = maxf(10, session.duration * 1.15)
  timeline.custom_minimum_size.y = 28 + rows.size() * 38
  timeline.queue_redraw()
- seek_slider.max_value = maxf(0.001, engine.call("get_duration"))
+ seek_slider.max_value = maxf(0.001, session.duration)
  syncing = false
 
 func _process(delta: float) -> void:
- if not engine or not engine.has_method("get_track_count"): return
- var levels: Vector2 = engine.call("get_levels")
+ if not session: return
+ var levels: Vector2 = session.levels
  for channel in range(2): master_meters[channel].value = maxf(levels[channel], master_meters[channel].value - delta * 1.5)
  for track in range(rows.size()):
-  var track_levels: Vector2 = engine.call("get_track_levels", track)
+  var track_levels: Vector2 = session.tracks[track].levels
   for channel in range(2): rows[track].meters[channel].value = maxf(track_levels[channel], rows[track].meters[channel].value - delta * 1.5)
- var position: float = engine.call("get_position")
+ var position: float = session.position
  timeline.playhead = position
  timeline.queue_redraw()
  syncing = true
  if not seek_dragging: seek_slider.value = position
  syncing = false
- time_label.text = "%.2f / %.2f seconds%s" % [position, engine.call("get_duration"), "  CLIPPING — lower master" if maxf(levels.x, levels.y) > 1 else ""]
+ time_label.text = "%.2f / %.2f seconds%s" % [position, session.duration, "  CLIPPING — lower master" if maxf(levels.x, levels.y) > 1 else ""]
 
 func _exit_tree() -> void:
- if engine:
-  engine.call("shutdown")
-  engine = null
+ if session:
+  session.shutdown()

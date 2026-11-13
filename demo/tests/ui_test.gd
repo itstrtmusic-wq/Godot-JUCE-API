@@ -16,7 +16,7 @@ func run() -> void:
  var demo = scene.instantiate()
  root.add_child(demo)
  await process_frame
- if not demo.engine or not demo.engine.has_method("load_track_wav"):
+ if not demo.session or demo.session.tracks.size() != 2:
   push_error("Updated engine required")
   quit(1)
   return
@@ -47,9 +47,9 @@ func run() -> void:
  release.button_index = MOUSE_BUTTON_LEFT
  release.position = motion.position
  timeline._gui_input(release)
- check(demo.engine.get_track_offset(0) > original, "Dragging clip must commit offset to engine")
- check(absf(demo.rows[0].offset.value - demo.engine.get_track_offset(0)) < 0.011, "Offset control must match moved clip")
- demo.engine.clear_track(0)
+ check(demo.session.tracks[0].offset > original, "Dragging clip must commit offset to engine")
+ check(absf(demo.rows[0].offset.value - demo.session.tracks[0].offset) < 0.011, "Offset control must match moved clip")
+ demo.session.tracks[0].clear()
  demo._refresh_timeline()
  check(demo.timeline.lengths[0] == 0, "Cleared clip must disappear")
  demo.queue_free()

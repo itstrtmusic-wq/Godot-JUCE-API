@@ -1,6 +1,23 @@
 # Godot JUCE Audio Bridge
 
-A Windows x64 GDExtension for building a standalone audio application with a Godot interface and JUCE device output. Version 0.2 adds a multitrack mixer and basic timeline. It is an early DAW foundation; recording, MIDI, plug-in hosting and project saving are still to come.
+A Windows x64 GDExtension for building a standalone audio application with a Godot interface and JUCE device output. The current version includes a multitrack mixer, basic timeline, and a GDScript API. It is an early DAW foundation; recording, MIDI, plug-in hosting and project saving are still to come.
+
+## GDScript API — no C++ required for your interface
+
+Use `AudioSession` and `AudioTrack` to control the engine with properties and Godot signals:
+
+```gdscript
+var daw = AudioSession.new()
+add_child(daw) # Automatically initializes the audio device.
+var drums = daw.add_track("Drums")
+if drums and drums.load_wav("C:/Audio/drums.wav").is_empty():
+    drums.volume = 0.8
+    drums.pan = -0.2
+    daw.playback_finished.connect(func(): print("Finished"))
+    daw.play()
+```
+
+See **[the GDScript API guide](docs/GDSCRIPT_API.md)** for error handling, device selection, all properties/signals, and a complete starter script. The demo now uses this layer. Copy the whole add-on, including its `api` folder and DLL. Existing multitrack DLLs remain compatible; the GDScript layer adds no native audio callbacks. Audio runs in C++, and UI notifications arrive on Godot's main thread.
 
 ## Build on Windows
 
@@ -66,7 +83,7 @@ func _exit_tree():
 
 JUCE needs absolute filesystem paths. In the editor, `ProjectSettings.globalize_path("res://music.wav")` works for loose files. In exported applications JUCE cannot read resources inside Godot's PCK; use external WAVs or extract packaged files to `user://` first. Call all API methods on Godot's main thread.
 
-### API
+### Low-level native API
 
 Track indices are zero-based and stable. Two empty tracks exist initially; there is no track deletion yet. Use `clear_track` to remove a clip and reuse a track.
 
@@ -112,6 +129,7 @@ python tests/make_fixture.py
 godot --headless --path demo --editor --import --quit
 godot --headless --path demo --script res://tests/engine_test.gd
 godot --headless --path demo --script res://tests/ui_test.gd
+godot --headless --path demo --script res://tests/api_test.gd
 ```
 
 The C++ test executes the same renderer as the device callback, without hardware. It checks summing, a shared clock, clip offsets/gaps, gain/pan, mute/solo, pause/stop/seek ramps, EOF/restart, resampling, alias suppression and the output ceiling. Godot tests check the native API, WAV/error handling, track limits, controls and clip dragging. The Windows workflow runs these tests and uploads the demo with its DLL.
