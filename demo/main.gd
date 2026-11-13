@@ -7,6 +7,8 @@ var status: Label
 var time_label: Label
 var device_list: OptionButton
 var picker: FileDialog
+var project_picker: FileDialog
+var master_slider: HSlider
 var selected_track := 0
 var timeline
 var track_panel: VBoxContainer
@@ -42,6 +44,8 @@ func _ready() -> void:
  transport.append(_button(controls, "Pause", func(): session.pause()))
  transport.append(_button(controls, "Stop", func(): session.stop()))
  add_button = _button(controls, "Add track", _add_track)
+ _button(controls, "Open project…", func(): _project_dialog(false))
+ _button(controls, "Save project…", func(): _project_dialog(true))
  time_label = _label(controls, "0.00 / 0.00 seconds")
  seek_slider = _slider(panel, 0, 10, 0, func(value: float):
   if session and not syncing: session.seek(value))
@@ -50,7 +54,7 @@ func _ready() -> void:
  var master := HBoxContainer.new()
  panel.add_child(master)
  _label(master, "Master")
- _slider(master, 0, 1, 0.5, func(value: float):
+ master_slider = _slider(master, 0, 1, 0.5, func(value: float):
   if session: session.master_volume = value)
  for channel in ["L", "R"]:
   _label(master, channel)
@@ -78,10 +82,18 @@ func _ready() -> void:
  picker.filters = PackedStringArray(["*.wav ; WAV audio"])
  add_child(picker)
  picker.file_selected.connect(_load_file)
+ project_picker = FileDialog.new()
+ project_picker.access = FileDialog.ACCESS_FILESYSTEM
+ project_picker.filters = PackedStringArray(["*.gjproject ; Godot JUCE session"])
+ add_child(project_picker)
+ project_picker.file_selected.connect(func(path: String):
+  if project_picker.file_mode == FileDialog.FILE_MODE_SAVE_FILE: _save_project(path)
+  else: _open_project(path))
  session = Session.new()
  session.auto_initialize = false
  add_child(session)
  session.audio_error.connect(func(message: String): status.text = message)
+ session.project_loaded.connect(func(_path: String): _rebuild_rows())
  session.playback_finished.connect(func(): status.text = "Playback finished.")
  var error: String = session.initialize()
  ready_audio = error.is_empty()
@@ -144,11 +156,12 @@ func _create_row(track: int) -> void:
  track_panel.add_child(box)
  var header := HBoxContainer.new()
  box.add_child(header)
- _label(header, "Track %d" % (track + 1))
+ _label(header, session.tracks[track].track_name)
  var load_button := _button(header, "Open WAV…", func():
   selected_track = track
   picker.popup_centered_ratio(0.95))
- var name_label := _label(header, "Empty")
+ var audio := session.tracks[track]
+ var name_label := _label(header, audio.file_path.get_file() if not audio.file_path.is_empty() else "Empty")
  name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
  name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
  _button(header, "Clear", func():
@@ -163,17 +176,19 @@ func _create_row(track: int) -> void:
  var offset := SpinBox.new()
  offset.max_value = 86400
  offset.step = 0.01
+ offset.value = audio.offset
  offset.custom_minimum_size.x = 100
  controls.add_child(offset)
  offset.value_changed.connect(func(value: float):
   if not syncing: _move_clip(track, value))
  _label(controls, "Volume")
- _slider(controls, 0, 1, 1, func(value: float): session.tracks[track].volume = value)
+ _slider(controls, 0, 1, audio.volume, func(value: float): session.tracks[track].volume = value)
  _label(controls, "Pan L / R")
- _slider(controls, -1, 1, 0, func(value: float): session.tracks[track].pan = value)
+ _slider(controls, -1, 1, audio.pan, func(value: float): session.tracks[track].pan = value)
  for item in [["Mute", "muted"], ["Solo", "solo"]]:
   var toggle := CheckButton.new()
   toggle.text = item[0]
+  toggle.button_pressed = audio.get(item[1])
   controls.add_child(toggle)
   toggle.toggled.connect(func(enabled: bool): session.tracks[track].set(item[1], enabled))
  var meter_l := _meter(controls)
@@ -235,3 +250,32 @@ func _process(delta: float) -> void:
 func _exit_tree() -> void:
  if session:
   session.shutdown()
+
+func _project_dialog(saving: bool) -> void:
+ project_picker.file_mode = FileDialog.FILE_MODE_SAVE_FILE if saving else FileDialog.FILE_MODE_OPEN_FILE
+ project_picker.title = "Save session" if saving else "Open session"
+ if saving: project_picker.current_file = "session.gjproject"
+ project_picker.popup_centered_ratio(0.85)
+
+func _save_project(path: String) -> void:
+ if not path.ends_with(".gjproject"): path += ".gjproject"
+ var error: String = session.save_project(path)
+ status.text = "Saved " + path.get_file() if error.is_empty() else error
+
+func _open_project(path: String) -> void:
+ var error: String = session.load_project(path)
+ ready_audio = session.audio_ready
+ if not ready_audio: _unavailable(error)
+ status.text = "Opened " + path.get_file() if error.is_empty() else error
+
+func _rebuild_rows() -> void:
+ for child in track_panel.get_children():
+  track_panel.remove_child(child)
+  child.queue_free()
+ rows.clear()
+ for track in session.tracks: _create_row(track.index)
+ selected_track = 0
+ master_slider.set_value_no_signal(session.master_volume)
+ add_button.disabled = not ready_audio or rows.size() >= 16
+ _refresh_timeline()
+ if not ready_audio: _unavailable("Session loaded. Audio device is unavailable.")

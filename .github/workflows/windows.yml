@@ -22,6 +22,8 @@ jobs:
           & $godot --headless --path demo --script res://tests/ui_test.gd
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $godot --headless --path demo --script res://tests/api_test.gd
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $godot --headless --path demo --script res://tests/project_test.gd
           exit $LASTEXITCODE
       - uses: actions/upload-artifact@v4
         with:

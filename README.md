@@ -1,6 +1,6 @@
 # Godot JUCE Audio Bridge
 
-A Windows x64 GDExtension for building a standalone audio application with a Godot interface and JUCE device output. The current version includes a multitrack mixer, basic timeline, and a GDScript API. It is an early DAW foundation; recording, MIDI, plug-in hosting and project saving are still to come.
+A Windows x64 GDExtension for building a standalone audio application with a Godot interface and JUCE device output. The current version includes a multitrack mixer, basic timeline, and a GDScript API. It is an early DAW foundation; recording, MIDI and plug-in hosting are still to come.
 
 ## GDScript API — no C++ required for your interface
 
@@ -48,6 +48,8 @@ Open `demo/project.godot` in Godot and press **F5**.
 Loading, clearing and moving clips stops and rewinds the session. Failed loads preserve the existing audio. Pause preserves position after a short fade; Stop fades then rewinds. Playback stops at the last loaded clip's end, including its offset. Pressing Play at the end restarts the session. Several soloed tracks play together; mute takes precedence over solo. Soloing an empty track can silence other tracks.
 
 Track meters show stereo peaks after the track controls and before the master. Master meters show peaks before the output safety ceiling. A clipping message means the summed signal exceeded 1.0: lower the master or track volumes. The output ceiling is hard clipping protection, not a transparent limiter. Start with the default master gain of 50%.
+
+Use **Save project…** and **Open project…** to save/reopen `.gjproject` sessions. Track names, audio references, offsets, volume/pan/mute/solo and master volume are restored. WAVs are referenced, not embedded; keep them available. Opening a project stops/rewinds transport and replaces track handles. Malformed projects and missing WAVs leave the loaded session intact. See the API guide for staging-memory and device-reopen behavior.
 
 The Windows backend is JUCE's default WASAPI implementation. The device menu lists outputs for that backend. Backend selection and ASIO are not included.
 
@@ -117,7 +119,7 @@ JUCE owns clip output; Godot's audio server is not used for these tracks. A shar
 
 The callback makes no Godot/GDScript calls, performs no file I/O or buffer allocation, and communicates through lock-free atomics. Track gains, balance, master volume, mute/solo and transport transitions are smoothed over approximately 5 ms. Clip starts and ends have 5 ms fades. These deliberately soften transients at file boundaries. Seeks briefly fade the old position out before jumping and fading the new position in.
 
-All clips are decoded into memory: at most 16 tracks, one clip per track, 33,554,432 frames per clip, and 256 MiB total decoded audio. Temporary decoding buffers can make peak memory usage higher. Loading and structural changes detach the callback before altering its buffers; these operations are synchronous, may freeze the interface, and do not have a playback fade-out. No disk streaming, waveform display, clip trimming, looping, recording, MIDI, VST3 hosting or project persistence is implemented yet. The timeline shows clip rectangles with file names and seconds, not waveforms or musical bars/beats. Metering polls latest-block peaks and can miss short transients.
+All clips are decoded into memory: at most 16 tracks, one clip per track, 33,554,432 frames per clip, and 256 MiB total decoded audio. Temporary decoding buffers can make peak memory usage higher. Loading and structural changes detach the callback before altering its buffers; these operations are synchronous, may freeze the interface, and do not have a playback fade-out. No disk streaming, waveform display, clip trimming, looping, recording, MIDI or VST3 hosting is implemented yet. The timeline shows clip rectangles with file names and seconds, not waveforms or musical bars/beats. Metering polls latest-block peaks and can miss short transients.
 
 ## Validation
 
@@ -130,6 +132,7 @@ godot --headless --path demo --editor --import --quit
 godot --headless --path demo --script res://tests/engine_test.gd
 godot --headless --path demo --script res://tests/ui_test.gd
 godot --headless --path demo --script res://tests/api_test.gd
+godot --headless --path demo --script res://tests/project_test.gd
 ```
 
 The C++ test executes the same renderer as the device callback, without hardware. It checks summing, a shared clock, clip offsets/gaps, gain/pan, mute/solo, pause/stop/seek ramps, EOF/restart, resampling, alias suppression and the output ceiling. Godot tests check the native API, WAV/error handling, track limits, controls and clip dragging. The Windows workflow runs these tests and uploads the demo with its DLL.

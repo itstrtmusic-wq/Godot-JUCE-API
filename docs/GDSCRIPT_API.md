@@ -124,3 +124,45 @@ Property/error/file-load signals are synchronous main-thread notifications. WAV 
 The existing limits still apply: one clip per track, 256 MiB total decoded audio, WAV-only loading, no recording/MIDI/effect graph yet. `res://` and `user://` loose-file paths are globalized automatically, but JUCE cannot read files embedded in an exported PCK; extract them to `user://` or use external files. Use this layer consistently: mixing direct `JuceEngine` control with cached AudioTrack properties is not supported.
 
 The multitrack demo uses this API in `demo/main.gd`. The original raw `JuceEngine` interface remains available for advanced integrations.
+
+## Save and reopen a session
+
+```gdscript
+# These return an empty string on success and emit audio_error on failure.
+var error = daw.save_project("user://my-song.gjproject")
+if not error.is_empty():
+    push_error(error)
+
+# Existing track handles are replaced on successful load. Rebuild your UI or
+# retrieve fresh handles inside this signal, rather than reusing old ones.
+daw.project_loaded.connect(func(path: String):
+    print("Opened ", path)
+    for track in daw.tracks:
+        print(track.track_name, " ", track.file_path))
+daw.load_project("user://my-song.gjproject")
+```
+
+`save_project(path)` saves track names/order, WAV references, offsets, volume, pan, mute, solo and master volume in versioned JSON. It does not change transport or copy audio. Files beneath the project directory use relative references; other audio keeps absolute references. Keep the WAVs available, or move the project folder together with its referenced audio. Projects are not self-contained audio bundles. Playback position, playing/paused state and audio-device preferences are not serialized.
+
+`load_project(path)` validates the entire project and decodes its referenced WAVs in an unopened staging engine before replacing your session. A malformed project, missing/invalid WAV, or decode limit failure leaves existing track objects and audio untouched. A successful load starts stopped at zero and replaces all track objects. Old retained handles are detached, as if their session were gone. Listen to `project_loaded(path)` and reacquire `daw.tracks`; restored tracks do not individually emit `track_added` or `loaded`. `session_changed` also fires after the successful replacement. `project_saved(path)` fires only after a successful save.
+
+Loading is synchronous and may pause the interface. Staging can roughly double decoded-audio memory while both sessions exist, plus temporary decoder buffers. If audio is initialized, the loader closes the old device only after decoding succeeds, opens the staged engine, and reapplies the selected output. A device-open failure attempts to restore the previous engine/device and reports an error; its tracks remain available, but transport is stopped. If restoration also fails, `audio_ready` becomes false and `audio_ready_changed(false)` is emitted. Call `initialize()` to retry. Hardware activation must still be tested on Windows.
+
+Both project methods accept an absolute path, `res://` loose-file path, or `user://` path. Use a writable location such as `user://` in exports. The `.gjproject` extension is conventional; the API checks the actual format/version. Project files are limited to 1 MiB, 16 tracks, and valid mixer/offset ranges. Saving writes a sibling temporary file, flushes it and renames it over the destination; failures before replacement preserve the old file. This does not guarantee recovery from an OS crash or power loss.
+
+## Which JUCE features can GDScript call today?
+
+Only the bindings provided by this add-on are callable; importing JUCE does not expose every JUCE C++ class automatically.
+
+| Feature | Available through the current API |
+|---|---|
+| Windows output devices | Initialize/shutdown, list/select WASAPI outputs |
+| Playback and mixing | Mono/stereo WAVs, up to 16 tracks, master/track gain, balance, mute/solo |
+| Timeline and transport | Clip offsets, shared play/pause/stop/seek, position/duration |
+| Notifications | Main-thread loading/error/state/completion/meter signals |
+| Project files | Save/load through GDScript; this is an add-on feature, not a JUCE callback |
+| Input recording, MIDI, VST3 hosting | Not yet exposed |
+| JUCE DSP/effect processors | Not yet exposed; no GDScript real-time audio processing callback |
+| JUCE GUI components or arbitrary JUCE classes | Not exposed; build the interface with Godot |
+
+We can extend this surface with dedicated GDScript-facing objects as those engine capabilities are implemented.
