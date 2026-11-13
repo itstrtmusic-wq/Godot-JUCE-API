@@ -147,7 +147,7 @@ func _create_row(track: int) -> void:
  _label(header, "Track %d" % (track + 1))
  var load_button := _button(header, "Open WAV…", func():
   selected_track = track
-  picker.popup_centered_ratio(0.8))
+  picker.popup_centered_ratio(0.95))
  var name_label := _label(header, "Empty")
  name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
  name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
